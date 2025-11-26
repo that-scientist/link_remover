@@ -7,15 +7,110 @@ while preserving human-readable text.
 import sys
 import os
 import shutil
+import subprocess
 from pathlib import Path
 
 # Auto-detect and use venv Python if available
 _script_dir = Path(__file__).parent.resolve()
-_venv_python = _script_dir / 'venv' / 'bin' / 'python3'
-if _venv_python.exists() and not sys.executable.startswith(str(_script_dir / 'venv')):
-    # Re-execute with venv Python
-    os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
+_venv_dir = _script_dir / 'venv'
+_venv_python = _venv_dir / 'bin' / 'python3'
+_requirements_file = _script_dir / 'requirements.txt'
 
+def ensure_venv():
+    """Create virtual environment if it doesn't exist."""
+    if not _venv_dir.exists():
+        print("Creating virtual environment...")
+        try:
+            subprocess.run([sys.executable, '-m', 'venv', str(_venv_dir)], 
+                         check=True, capture_output=True)
+            print("✓ Virtual environment created")
+            return True
+        except subprocess.CalledProcessError as e:
+            print(f"Error creating virtual environment: {e}")
+            return False
+    return True
+
+def install_requirements():
+    """Install packages from requirements.txt."""
+    if not _requirements_file.exists():
+        print(f"Warning: {_requirements_file} not found")
+        return False
+    
+    print("Installing required packages...")
+    pip_cmd = [sys.executable, '-m', 'pip', 'install', '-q', '-r', str(_requirements_file)]
+    
+    try:
+        subprocess.run(pip_cmd, check=True, capture_output=True, text=True)
+        print("✓ Packages installed successfully")
+        return True
+    except subprocess.CalledProcessError as e:
+        error_msg = e.stderr if e.stderr else (e.stdout if e.stdout else 'Unknown error')
+        print(f"Error installing packages: {error_msg}")
+        print(f"Try running manually: {sys.executable} -m pip install -r {_requirements_file}")
+        return False
+
+def check_and_install_packages():
+    """Check if required packages are installed, install if missing."""
+    # Check if packages are installed
+    docx_available = False
+    pdf_available = False
+    
+    try:
+        import docx  # noqa: F401
+        docx_available = True
+    except ImportError:
+        pass
+    
+    try:
+        import pypdf  # noqa: F401
+        pdf_available = True
+    except ImportError:
+        try:
+            import PyPDF2  # noqa: F401
+            pdf_available = True
+        except ImportError:
+            pass
+    
+    # If both are available, we're good
+    if docx_available and pdf_available:
+        return True
+    
+    # Some packages are missing, try to install
+    if install_requirements():
+        # Try imports again after installation
+        try:
+            import docx  # noqa: F401
+            docx_available = True
+        except ImportError:
+            pass
+        
+        try:
+            import pypdf  # noqa: F401
+            pdf_available = True
+        except ImportError:
+            try:
+                import PyPDF2  # noqa: F401
+                pdf_available = True
+            except ImportError:
+                pass
+        
+        return docx_available and pdf_available
+    
+    return False
+
+# Setup virtual environment and ensure we're using it
+if not sys.executable.startswith(str(_script_dir / 'venv')):
+    # Not using venv, check if we should create and use it
+    if ensure_venv() and _venv_python.exists():
+        # Re-execute with venv Python
+        os.execv(str(_venv_python), [str(_venv_python)] + sys.argv)
+else:
+    # We're in venv, check and install packages if needed
+    # This will install packages if missing, but won't re-execute
+    # Packages will be available on next import attempt
+    check_and_install_packages()
+
+# Now try to import required packages
 try:
     from docx import Document
     from docx.oxml.ns import qn
@@ -46,18 +141,22 @@ def remove_hyperlinks_from_docx(input_path: Path, output_path: Path) -> bool:
         True if successful, False otherwise
     """
     if not DOCX_AVAILABLE:
-        import sys
-        venv_python = Path(__file__).parent / 'venv' / 'bin' / 'python3'
-        if venv_python.exists():
-            print(f"Error: python-docx library not found in current Python environment.")
-            print(f"  Current Python: {sys.executable}")
-            print(f"  Please activate the virtual environment first:")
-            print(f"    source venv/bin/activate")
-            print(f"  Or install the library in your current environment:")
-            print(f"    pip install python-docx")
+        # Try to install packages if we're in venv, then re-execute
+        if sys.executable.startswith(str(_script_dir / 'venv')):
+            print("python-docx library not found. Attempting to install...")
+            if install_requirements():
+                # Re-execute script to pick up newly installed packages
+                print("✓ Packages installed. Restarting script...")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            else:
+                print("Error: Failed to install required packages.")
+                return False
         else:
-            print("Error: python-docx library not installed. Install with: pip install python-docx")
-        return False
+            print("Error: python-docx library not installed.")
+            print(f"  Current Python: {sys.executable}")
+            print(f"  Please run the script again to auto-install packages, or install manually:")
+            print(f"    {sys.executable} -m pip install python-docx")
+            return False
     
     try:
         doc = Document(input_path)
@@ -142,18 +241,22 @@ def remove_hyperlinks_from_pdf(input_path: Path, output_path: Path) -> bool:
         True if successful, False otherwise
     """
     if not PDF_AVAILABLE:
-        import sys
-        venv_python = Path(__file__).parent / 'venv' / 'bin' / 'python3'
-        if venv_python.exists():
-            print(f"Error: pypdf library not found in current Python environment.")
-            print(f"  Current Python: {sys.executable}")
-            print(f"  Please activate the virtual environment first:")
-            print(f"    source venv/bin/activate")
-            print(f"  Or install the library in your current environment:")
-            print(f"    pip install pypdf")
+        # Try to install packages if we're in venv, then re-execute
+        if sys.executable.startswith(str(_script_dir / 'venv')):
+            print("pypdf library not found. Attempting to install...")
+            if install_requirements():
+                # Re-execute script to pick up newly installed packages
+                print("✓ Packages installed. Restarting script...")
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            else:
+                print("Error: Failed to install required packages.")
+                return False
         else:
-            print("Error: pypdf library not installed. Install with: pip install pypdf")
-        return False
+            print("Error: pypdf library not installed.")
+            print(f"  Current Python: {sys.executable}")
+            print(f"  Please run the script again to auto-install packages, or install manually:")
+            print(f"    {sys.executable} -m pip install pypdf")
+            return False
     
     try:
         reader = PdfReader(input_path)
