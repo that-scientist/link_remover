@@ -42,3 +42,7 @@ out/*
 done/*
 !done/.gitkeep
 
+# Ignore .pdf and .docx files in root directory
+/*.pdf
+/*.docx
+
