@@ -49,19 +49,25 @@ pip install -r requirements.txt
 1. Place your `.docx` or `.pdf` files in the `input/` folder
 
 2. Run the script:
-```bash
-./link_remover.py
-```
+
+   **Option A: Double-click (macOS)**
+   - Double-click `link_remover.command` in Finder
+   - A Terminal window will open and run the script automatically
+
+   **Option B: Command line**
+   ```bash
+   ./link_remover.py
+   ```
 
    Or if the virtual environment is activated:
-```bash
-python link_remover.py
-```
+   ```bash
+   python link_remover.py
+   ```
 
    Or using Python directly:
-```bash
-python3 link_remover.py
-```
+   ```bash
+   python3 link_remover.py
+   ```
 
 3. Results:
    - **Processed files** (without hyperlinks) → `out/` folder
@@ -87,6 +93,7 @@ python3 link_remover.py
 ```
 link_remover/
 ├── link_remover.py      # Main script
+├── link_remover.command # macOS double-click launcher
 ├── requirements.txt      # Python dependencies
 ├── README.md            # This file
 ├── input/               # Place files to process here
