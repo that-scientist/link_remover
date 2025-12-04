@@ -54,6 +54,8 @@ def check_and_install_packages():
     # Check if packages are installed
     docx_available = False
     pdf_available = False
+    markdown_available = False
+    weasyprint_available = False
     
     try:
         import docx  # noqa: F401
@@ -71,32 +73,54 @@ def check_and_install_packages():
         except ImportError:
             pass
     
-    # If both are available, we're good
-    if docx_available and pdf_available:
-        return True
+    try:
+        import markdown  # noqa: F401
+        markdown_available = True
+    except ImportError:
+        pass
     
-    # Some packages are missing, try to install
-    if install_requirements():
-        # Try imports again after installation
-        try:
-            import docx  # noqa: F401
-            docx_available = True
-        except ImportError:
-            pass
-        
-        try:
-            import pypdf  # noqa: F401
-            pdf_available = True
-        except ImportError:
+    try:
+        from weasyprint import HTML  # noqa: F401
+        weasyprint_available = True
+    except ImportError:
+        pass
+    
+    # Core packages (docx and pdf) are required
+    if not (docx_available and pdf_available):
+        # Some packages are missing, try to install
+        if install_requirements():
+            # Try imports again after installation
             try:
-                import PyPDF2  # noqa: F401
+                import docx  # noqa: F401
+                docx_available = True
+            except ImportError:
+                pass
+            
+            try:
+                import pypdf  # noqa: F401
                 pdf_available = True
+            except ImportError:
+                try:
+                    import PyPDF2  # noqa: F401
+                    pdf_available = True
+                except ImportError:
+                    pass
+            
+            try:
+                import markdown  # noqa: F401
+                markdown_available = True
+            except ImportError:
+                pass
+            
+            try:
+                from weasyprint import HTML  # noqa: F401
+                weasyprint_available = True
             except ImportError:
                 pass
         
         return docx_available and pdf_available
     
-    return False
+    return True
 
 # Setup virtual environment and ensure we're using it
 if not sys.executable.startswith(str(_script_dir / 'venv')):
@@ -127,6 +151,18 @@ except ImportError:
         PDF_AVAILABLE = True
     except ImportError:
         PDF_AVAILABLE = False
+
+try:
+    import markdown
+    MARKDOWN_AVAILABLE = True
+except ImportError:
+    MARKDOWN_AVAILABLE = False
+
+try:
+    from weasyprint import HTML
+    WEASYPRINT_AVAILABLE = True
+except ImportError:
+    WEASYPRINT_AVAILABLE = False
 
 
 def remove_hyperlinks_from_docx(input_path: Path, output_path: Path) -> bool:
@@ -286,6 +322,328 @@ def remove_hyperlinks_from_pdf(input_path: Path, output_path: Path) -> bool:
         return False
 
 
+def is_markdown_file(file_path: Path) -> bool:
+    """
+    Detect if a text file contains markdown formatting.
+    
+    Args:
+        file_path: Path to the text file
+        
+    Returns:
+        True if file appears to be markdown, False if plaintext
+    """
+    try:
+        with open(file_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Check for common markdown patterns
+        markdown_indicators = [
+            r'^#{1,6}\s',  # Headers
+            r'\*\*.*?\*\*',  # Bold
+            r'\*.*?\*',  # Italic
+            r'\[.*?\]\(.*?\)',  # Links
+            r'^\s*[-*+]\s',  # Unordered lists
+            r'^\s*\d+\.\s',  # Ordered lists
+            r'```',  # Code blocks
+            r'`[^`]+`',  # Inline code
+            r'^\s*>\s',  # Blockquotes
+            r'^\s*\|.*\|',  # Tables
+            r'^---+$',  # Horizontal rules
+        ]
+        
+        import re
+        markdown_count = 0
+        for pattern in markdown_indicators:
+            if re.search(pattern, content, re.MULTILINE):
+                markdown_count += 1
+        
+        # If we find 2+ markdown patterns, consider it markdown
+        return markdown_count >= 2
+    except Exception:
+        return False
+
+
+def remove_hyperlinks_from_markdown(content: str) -> str:
+    """
+    Remove hyperlinks from markdown content while preserving text.
+    
+    Args:
+        content: Markdown content string
+        
+    Returns:
+        Markdown content with hyperlinks removed
+    """
+    import re
+    # Remove markdown links [text](url) -> text
+    content = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', content)
+    # Remove reference-style links [text][ref] -> text
+    content = re.sub(r'\[([^\]]+)\]\[[^\]]+\]', r'\1', content)
+    # Remove auto-links <url> -> url (as plain text)
+    content = re.sub(r'<([^>]+)>', r'\1', content)
+    return content
+
+
+def markdown_to_docx(markdown_content: str, output_path: Path) -> bool:
+    """
+    Convert markdown content to .docx format with proper formatting.
+    
+    Args:
+        markdown_content: Markdown content string
+        output_path: Path to save output .docx file
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if not DOCX_AVAILABLE:
+        print("Error: python-docx library not available for markdown conversion")
+        return False
+    
+    # Markdown library is optional for basic conversion, but helpful
+    # We can do basic conversion without it
+    
+    try:
+        from docx.shared import RGBColor
+        import re
+        
+        # Remove hyperlinks first
+        markdown_content = remove_hyperlinks_from_markdown(markdown_content)
+        
+        # Create new document
+        doc = Document()
+        
+        # Parse markdown line by line
+        lines = markdown_content.split('\n')
+        current_para = None
+        in_code_block = False
+        
+        for i, line in enumerate(lines):
+            original_line = line
+            line = line.rstrip()
+            
+            # Code blocks
+            if line.startswith('```'):
+                in_code_block = not in_code_block
+                if not in_code_block:
+                    current_para = None
+                continue
+            
+            if in_code_block:
+                if not current_para:
+                    current_para = doc.add_paragraph()
+                run = current_para.add_run(line + '\n')
+                run.font.name = 'Courier New'
+                run.font.color.rgb = RGBColor(0, 0, 0)
+                continue
+            
+            # Headers
+            if line.startswith('# '):
+                current_para = doc.add_heading(line[2:], level=1)
+            elif line.startswith('## '):
+                current_para = doc.add_heading(line[3:], level=2)
+            elif line.startswith('### '):
+                current_para = doc.add_heading(line[4:], level=3)
+            elif line.startswith('#### '):
+                current_para = doc.add_heading(line[5:], level=4)
+            elif line.startswith('##### '):
+                current_para = doc.add_heading(line[6:], level=5)
+            elif line.startswith('###### '):
+                current_para = doc.add_heading(line[7:], level=6)
+            # Unordered lists
+            elif re.match(r'^\s*[-*+]\s', line):
+                if not current_para:
+                    current_para = doc.add_paragraph()
+                text = re.sub(r'^\s*[-*+]\s+', '', line)
+                run = current_para.add_run('• ' + text)
+                run.font.color.rgb = RGBColor(0, 0, 0)
+            # Ordered lists
+            elif re.match(r'^\s*\d+\.\s', line):
+                if not current_para:
+                    current_para = doc.add_paragraph()
+                match = re.match(r'^\s*(\d+)\.\s+(.*)', line)
+                if match:
+                    num, text = match.groups()
+                    run = current_para.add_run(f'{num}. {text}')
+                    run.font.color.rgb = RGBColor(0, 0, 0)
+            # Blockquotes
+            elif re.match(r'^\s*>', line):
+                if not current_para:
+                    current_para = doc.add_paragraph()
+                text = re.sub(r'^\s*>+\s*', '', line)
+                run = current_para.add_run(text)
+                run.font.color.rgb = RGBColor(0, 0, 0)
+                run.italic = True
+            # Horizontal rules
+            elif re.match(r'^[-*_]{3,}$', line):
+                current_para = None
+            # Empty line
+            elif not line:
+                current_para = None
+            # Regular paragraph
+            else:
+                if not current_para:
+                    current_para = doc.add_paragraph()
+                
+                # Process inline formatting
+                text = line
+                # Remove markdown formatting but keep text
+                text = re.sub(r'\*\*([^*]+)\*\*', r'\1', text)  # Bold
+                text = re.sub(r'__([^_]+)__', r'\1', text)  # Bold (alternative)
+                text = re.sub(r'\*([^*]+)\*', r'\1', text)  # Italic
+                text = re.sub(r'_([^_]+)_', r'\1', text)  # Italic (alternative)
+                text = re.sub(r'`([^`]+)`', r'\1', text)  # Inline code
+                
+                run = current_para.add_run(text)
+                run.font.color.rgb = RGBColor(0, 0, 0)
+        
+        doc.save(output_path)
+        return True
+        
+    except Exception as e:
+        print(f"Error converting markdown to .docx: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def markdown_to_pdf(markdown_content: str, output_path: Path) -> bool:
+    """
+    Convert markdown content to PDF format with proper formatting.
+    
+    Args:
+        markdown_content: Markdown content string
+        output_path: Path to save output PDF file
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    if not MARKDOWN_AVAILABLE:
+        print("Error: markdown library not available. Attempting to install...")
+        if sys.executable.startswith(str(_script_dir / 'venv')):
+            if install_requirements():
+                print("✓ Packages installed. Please run the script again.")
+                return False
+        else:
+            print("Error: markdown library not installed.")
+            print(f"  Please run the script again to auto-install packages, or install manually:")
+            print(f"    {sys.executable} -m pip install markdown")
+            return False
+    
+    if not WEASYPRINT_AVAILABLE:
+        print("Error: weasyprint library not available. Attempting to install...")
+        if sys.executable.startswith(str(_script_dir / 'venv')):
+            if install_requirements():
+                print("✓ Packages installed. Please run the script again.")
+                return False
+        else:
+            print("Error: weasyprint library not installed.")
+            print(f"  Please run the script again to auto-install packages, or install manually:")
+            print(f"    {sys.executable} -m pip install weasyprint")
+            return False
+    
+    try:
+        # Remove hyperlinks first
+        markdown_content = remove_hyperlinks_from_markdown(markdown_content)
+        
+        # Convert markdown to HTML
+        html_content = markdown.markdown(markdown_content, extensions=['extra', 'codehilite'])
+        
+        # Add basic CSS styling
+        styled_html = f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body {{
+                    font-family: Arial, sans-serif;
+                    line-height: 1.6;
+                    color: #000000;
+                    max-width: 800px;
+                    margin: 0 auto;
+                    padding: 20px;
+                }}
+                h1, h2, h3, h4, h5, h6 {{
+                    color: #000000;
+                    margin-top: 1em;
+                    margin-bottom: 0.5em;
+                }}
+                p {{
+                    color: #000000;
+                    margin: 0.5em 0;
+                }}
+                code {{
+                    font-family: 'Courier New', monospace;
+                    background-color: #f4f4f4;
+                    padding: 2px 4px;
+                }}
+                pre {{
+                    background-color: #f4f4f4;
+                    padding: 10px;
+                    overflow-x: auto;
+                }}
+                a {{
+                    color: #000000;
+                    text-decoration: none;
+                }}
+            </style>
+        </head>
+        <body>
+        {html_content}
+        </body>
+        </html>
+        """
+        
+        # Convert HTML to PDF
+        HTML(string=styled_html).write_pdf(output_path)
+        return True
+        
+    except Exception as e:
+        print(f"Error converting markdown to PDF: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def process_markdown_file(input_path: Path, output_dir: Path) -> bool:
+    """
+    Process a markdown file: convert to both .docx and .pdf, remove hyperlinks.
+    
+    Args:
+        input_path: Path to input markdown file
+        output_dir: Output directory path
+        
+    Returns:
+        True if successful, False otherwise
+    """
+    try:
+        # Read markdown content
+        with open(input_path, 'r', encoding='utf-8') as f:
+            markdown_content = f.read()
+        
+        # Determine output filenames
+        base_name = input_path.stem
+        docx_output = output_dir / f"{base_name}.docx"
+        pdf_output = output_dir / f"{base_name}.pdf"
+        
+        # Convert to both formats
+        docx_success = markdown_to_docx(markdown_content, docx_output)
+        pdf_success = markdown_to_pdf(markdown_content, pdf_output)
+        
+        if not docx_success:
+            print(f"  Warning: Failed to create .docx output")
+        if not pdf_success:
+            print(f"  Warning: Failed to create PDF output")
+        
+        # Return True if at least one format succeeded
+        return docx_success or pdf_success
+        
+    except Exception as e:
+        print(f"Error processing markdown file: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
 def process_file(input_file: Path, input_dir: Path, output_dir: Path, done_dir: Path) -> bool:
     """
     Process a single file: remove hyperlinks and move to done folder.
@@ -313,6 +671,17 @@ def process_file(input_file: Path, input_dir: Path, output_dir: Path, done_dir: 
     elif file_ext == '.pdf':
         print(f"Processing PDF file: {file_name}")
         success = remove_hyperlinks_from_pdf(input_file, output_file)
+    elif file_ext == '.md':
+        print(f"Processing markdown file: {file_name}")
+        success = process_markdown_file(input_file, output_dir)
+    elif file_ext == '.txt':
+        # Check if it's markdown or plaintext
+        if is_markdown_file(input_file):
+            print(f"Processing markdown-formatted text file: {file_name}")
+            success = process_markdown_file(input_file, output_dir)
+        else:
+            print(f"Skipping plaintext file (not markdown): {file_name}")
+            return False
     else:
         print(f"Skipping unsupported file type: {file_name}")
         return False
@@ -344,7 +713,10 @@ def main():
     done_dir.mkdir(exist_ok=True)
     
     # Check for files in input directory
-    input_files = list(input_dir.glob('*.docx')) + list(input_dir.glob('*.pdf'))
+    input_files = (list(input_dir.glob('*.docx')) + 
+                   list(input_dir.glob('*.pdf')) + 
+                   list(input_dir.glob('*.md')) + 
+                   list(input_dir.glob('*.txt')))
     
     if not input_files:
         print("No .docx or .pdf files found in the input folder.")
